@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rift-engine/rift/internal/clock"
-	"github.com/rift-engine/rift/internal/executor"
-	"github.com/rift-engine/rift/internal/fusion"
-	r "github.com/rift-engine/rift/internal/rift"
-	"github.com/rift-engine/rift/internal/splitter"
+	"github.com/damienos61/rift/internal/clock"
+	"github.com/damienos61/rift/internal/executor"
+	"github.com/damienos61/rift/internal/fusion"
+	r "github.com/damienos61/rift/internal/rift"
+	"github.com/damienos61/rift/internal/splitter"
 )
 
 // ─── ID generator ─────────────────────────────────────────────────────────────

@@ -24,8 +24,8 @@
 package rift
 
 import (
-	"github.com/rift-engine/rift/internal/engine"
-	r "github.com/rift-engine/rift/internal/rift"
+	"github.com/damienos61/rift/internal/engine"
+	r "github.com/damienos61/rift/internal/rift"
 )
 
 // Re-export the types callers need so they never have to import internal/.

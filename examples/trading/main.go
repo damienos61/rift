@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/rift-engine/rift"
+	"github.com/damienos61/rift"
 )
 
 type Order struct {

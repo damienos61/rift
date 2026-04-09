@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	r "github.com/rift-engine/rift/internal/rift"
+	r "github.com/damienos61/rift/internal/rift"
 )
 
 // ─── Global Lamport counter ───────────────────────────────────────────────────

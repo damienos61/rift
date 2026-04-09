@@ -6,7 +6,7 @@ package splitter
 import (
 	"sync/atomic"
 
-	r "github.com/rift-engine/rift/internal/rift"
+	r "github.com/damienos61/rift/internal/rift"
 )
 
 // ─── ID generator ────────────────────────────────────────────────────────────

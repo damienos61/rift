@@ -25,8 +25,8 @@ package fusion
 import (
 	"sort"
 
-	"github.com/rift-engine/rift/internal/clock"
-	r "github.com/rift-engine/rift/internal/rift"
+	"github.com/damienos61/rift/internal/clock"
+	r "github.com/damienos61/rift/internal/rift"
 )
 
 // Engine implements r.FusionEngine.

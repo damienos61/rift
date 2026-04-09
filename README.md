@@ -42,7 +42,7 @@ The winning rift is chosen by causal priority score, not by arrival time — so 
 ## Quick start
 
 ```bash
-go get github.com/rift-engine/rift
+go get github.com/damienos61/rift
 ```
 
 ```go
@@ -50,7 +50,7 @@ package main
 
 import (
     "fmt"
-    "github.com/rift-engine/rift"
+    "github.com/damienos61/rift"
 )
 
 func main() {

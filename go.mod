@@ -1,3 +1,3 @@
-module github.com/rift-engine/rift
+module github.com/damienos61/rift
 
 go 1.22
