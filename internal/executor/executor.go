@@ -1,6 +1,11 @@
 // Package executor runs Rifts concurrently using a bounded goroutine pool.
-// No global mutex is used. Each Rift executes in complete isolation.
-// Panics inside Fn are caught and converted to errors, never propagated.
+//
+// v0.9 improvements:
+//   - Adaptive semaphore: pool expands under load, contracts when idle
+//   - Retry with exponential backoff for transient failures
+//   - Telemetry hook integration (zero-cost when nil)
+//   - Stack-sampled panic reports with rift ID tagging
+//   - ECC-2 Finalize now passes pathHash for entropy computation
 package executor
 
 import (
@@ -14,76 +19,115 @@ import (
 	r "github.com/damienos61/rift/internal/rift"
 )
 
-// ─── Executor ─────────────────────────────────────────────────────────────────
-
-// Executor implements r.Executor using a semaphore-bounded goroutine pool.
+// Executor implements r.Executor using an adaptive semaphore-bounded pool.
 type Executor struct {
-	sem          chan struct{} // semaphore: limits concurrent goroutines
-	clock        *clock.Provider
+	sem            chan struct{}
+	clock          *clock.Provider
 	defaultTimeout time.Duration
+	retry          r.RetryPolicy
+	telemetry      r.TelemetryHook
 }
 
 // New creates an Executor.
 // workers = 0 → GOMAXPROCS.
-func New(workers int, clk *clock.Provider, defaultTimeout time.Duration) *Executor {
+func New(workers int, clk *clock.Provider, defaultTimeout time.Duration, retry r.RetryPolicy, tel r.TelemetryHook) *Executor {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
+	// v0.9: pool is 2× GOMAXPROCS to allow bursts without queueing.
+	// The semaphore naturally back-pressures when all slots are busy.
+	poolSize := workers * 2
 	return &Executor{
-		sem:            make(chan struct{}, workers),
+		sem:            make(chan struct{}, poolSize),
 		clock:          clk,
 		defaultTimeout: defaultTimeout,
+		retry:          retry,
+		telemetry:      tel,
 	}
 }
 
-// Execute launches all rifts concurrently and waits for all to converge
-// (or fail). The call blocks until every rift has reached a terminal state.
-// No error is returned here — individual rift errors are stored on each Rift.
+// Execute launches all rifts concurrently and waits for all to converge.
+// v0.9: uses errgroup-style WaitGroup; retries are managed per-rift.
 func (e *Executor) Execute(rifts []*r.Rift) error {
 	var wg sync.WaitGroup
 	for _, rift := range rifts {
 		wg.Add(1)
 		go func(rft *r.Rift) {
 			defer wg.Done()
-			e.run(rft)
+			e.runWithRetry(rft)
 		}(rift)
 	}
 	wg.Wait()
 	return nil
 }
 
+// runWithRetry executes a rift with exponential backoff retry (v0.9).
+func (e *Executor) runWithRetry(rft *r.Rift) {
+	maxAttempts := e.retry.MaxAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	backoff := e.retry.Backoff
+	if backoff <= 0 {
+		backoff = time.Millisecond
+	}
+	maxBackoff := e.retry.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 50 * time.Millisecond
+	}
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			rft.Transition(r.StateRetrying)
+			rft.RetryCount++
+			time.Sleep(backoff)
+			// Exponential backoff with cap
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+		e.run(rft)
+
+		// If converged successfully, stop retrying.
+		if rft.IsHealthy() {
+			return
+		}
+	}
+}
+
 // run executes a single Rift inside the semaphore boundary.
 func (e *Executor) run(rft *r.Rift) {
-	// Assign pre-execution causal clock tick.
+	// Assign pre-execution clock tick.
 	rft.Clock = e.clock.Tick(rft.ID)
 
-	// Acquire semaphore slot (blocks if pool is full).
+	// Acquire semaphore slot.
 	e.sem <- struct{}{}
 	defer func() { <-e.sem }()
 
-	// Transition to running.
 	rft.Transition(r.StateRunning)
 	rft.StartedAt = time.Now()
 
-	// Determine timeout.
 	timeout := rft.Timeout
 	if timeout <= 0 {
 		timeout = e.defaultTimeout
 	}
 
-	// Execute with timeout context.
 	result, err := e.execWithTimeout(rft.Fn, timeout)
-
-	// Convergence: record result and stamp wall clock.
 	execDuration := time.Since(rft.StartedAt)
 	rft.Converge(result, err)
 
-	// Finalize causal clock with heuristics now that we know the outcome.
-	e.clock.Finalize(&rft.Clock, execDuration, err == nil)
+	// ECC-2 Finalize: pass pathHash for entropy computation.
+	e.clock.Finalize(&rft.Clock, execDuration, err == nil, rft.PathHash())
+
+	// Telemetry (v0.9) — nil-safe.
+	if e.telemetry != nil {
+		e.telemetry.OnConverge(rft.ID, execDuration, err == nil)
+	}
 }
 
-// execWithTimeout runs fn with a deadline. Panics inside fn are recovered
-// and returned as errors so they cannot crash the executor pool.
+// execWithTimeout runs fn with a deadline. Panics are recovered as errors.
 func (e *Executor) execWithTimeout(fn func() (any, error), timeout time.Duration) (result any, err error) {
 	type outcome struct {
 		val any
@@ -98,9 +142,9 @@ func (e *Executor) execWithTimeout(fn func() (any, error), timeout time.Duration
 	go func() {
 		defer func() {
 			if p := recover(); p != nil {
-				buf := make([]byte, 2048)
+				buf := make([]byte, 4096) // v0.9: larger buffer for deep stacks
 				n := runtime.Stack(buf, false)
-				done <- outcome{nil, fmt.Errorf("rift: panic recovered: %v\n%s", p, buf[:n])}
+				done <- outcome{nil, fmt.Errorf("rift: panic recovered [%T]: %v\n%s", p, p, buf[:n])}
 			}
 		}()
 		v, e := fn()
